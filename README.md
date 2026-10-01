@@ -1,5 +1,8 @@
 # QBO-IES-Connector
 
+> **Prefer a browser?** The [`web/`](web/README.md) folder has the same tools as a web app with user
+> accounts and roles, styled like QuickBooks Online, ready for Vercel + Neon.
+
 Command-line tools for bulk chart of accounts work in **Intuit Enterprise Suite (IES)** and QuickBooks
 Online, through Intuit's QuickBooks Online Accounting API.
 
