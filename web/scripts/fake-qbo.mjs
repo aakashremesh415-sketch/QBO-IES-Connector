@@ -4,6 +4,7 @@
  *   QBO_API_BASE=http://localhost:3999
  *   QBO_TOKEN_URL=http://localhost:3999/oauth2/v1/tokens/bearer
  *   QBO_AUTHORIZE_URL=http://localhost:3999/connect/oauth2
+ *   QBO_REVOKE_URL=http://localhost:3999/v2/oauth2/tokens/revoke
  * Run: node scripts/fake-qbo.mjs
  */
 import http from "node:http";
@@ -151,7 +152,16 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(302, { Location: back.toString() });
     return res.end();
   }
+  if (path === "/v2/oauth2/tokens/revoke") {
+    console.log("revoked", JSON.parse(body || "{}").token);
+    res.writeHead(200);
+    return res.end();
+  }
   if (path === "/oauth2/v1/tokens/bearer") {
+    if (process.env.FAKE_REJECT_REFRESH && body.includes("grant_type=refresh_token")) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: "invalid_grant" }));
+    }
     return send(res, { access_token: `at-${Date.now()}`, refresh_token: `rt-${Date.now()}`, expires_in: 3600, x_refresh_token_expires_in: 8640000 });
   }
   const m = path.match(/^\/v3\/company\/([^/]+)\/(.+)$/);

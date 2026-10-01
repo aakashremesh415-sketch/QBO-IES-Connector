@@ -17,6 +17,7 @@ export default function PublicPage({ title, updated, children }: { title: string
         <footer className="mt-10 flex flex-wrap gap-4 border-t border-line pt-4 text-sm">
           <Link className="link" href="/terms">Terms of use</Link>
           <Link className="link" href="/privacy">Privacy policy</Link>
+          <Link className="link" href="/support">Help and support</Link>
           <Link className="link" href="/login">Sign in</Link>
         </footer>
       </article>

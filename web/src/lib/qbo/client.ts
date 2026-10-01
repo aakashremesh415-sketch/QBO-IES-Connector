@@ -7,8 +7,16 @@ import { db } from "@/db";
 import { companies } from "@/db/schema";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 
-const AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2";
-const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
+// Fallbacks if Intuit's discovery document can't be fetched.
+const DEFAULT_ENDPOINTS = {
+  authorization_endpoint: "https://appcenter.intuit.com/connect/oauth2",
+  token_endpoint: "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
+  revocation_endpoint: "https://developer.api.intuit.com/v2/oauth2/tokens/revoke",
+};
+const DISCOVERY_URLS = {
+  production: "https://developer.api.intuit.com/.well-known/openid_configuration",
+  sandbox: "https://developer.api.intuit.com/.well-known/openid_sandbox_configuration",
+};
 const MINOR_VERSION = "75";
 const SCOPE = "com.intuit.quickbooks.accounting";
 
@@ -33,8 +41,42 @@ export function qboRedirectUri(origin?: string): string {
   return `${base}/api/qbo/callback`;
 }
 
-export function authorizeUrl(state: string, redirectUri: string): string {
-  const u = new URL(process.env.QBO_AUTHORIZE_URL ?? AUTHORIZE_URL);
+type Endpoints = typeof DEFAULT_ENDPOINTS;
+let discovered: { at: number; env: string; endpoints: Endpoints } | null = null;
+
+/**
+ * OAuth endpoints from Intuit's discovery document (cached for a day), as Intuit recommends,
+ * so a change on their side doesn't need a code change here. QBO_*_URL variables override
+ * them for local testing only.
+ */
+export async function oauthEndpoints(): Promise<Endpoints> {
+  const env = qboEnvironment();
+  if (!discovered || discovered.env !== env || Date.now() - discovered.at > 24 * 3600_000) {
+    let endpoints = DEFAULT_ENDPOINTS;
+    try {
+      const res = await fetch(DISCOVERY_URLS[env], { headers: { Accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const doc = await res.json();
+        endpoints = {
+          authorization_endpoint: doc.authorization_endpoint ?? DEFAULT_ENDPOINTS.authorization_endpoint,
+          token_endpoint: doc.token_endpoint ?? DEFAULT_ENDPOINTS.token_endpoint,
+          revocation_endpoint: doc.revocation_endpoint ?? DEFAULT_ENDPOINTS.revocation_endpoint,
+        };
+      }
+    } catch {
+      /* keep the defaults; try again next time */
+    }
+    discovered = { at: Date.now(), env, endpoints };
+  }
+  return {
+    authorization_endpoint: process.env.QBO_AUTHORIZE_URL ?? discovered.endpoints.authorization_endpoint,
+    token_endpoint: process.env.QBO_TOKEN_URL ?? discovered.endpoints.token_endpoint,
+    revocation_endpoint: process.env.QBO_REVOKE_URL ?? discovered.endpoints.revocation_endpoint,
+  };
+}
+
+export async function authorizeUrl(state: string, redirectUri: string): Promise<string> {
+  const u = new URL((await oauthEndpoints()).authorization_endpoint);
   u.searchParams.set("client_id", env("QBO_CLIENT_ID"));
   u.searchParams.set("response_type", "code");
   u.searchParams.set("scope", SCOPE);
@@ -45,16 +87,34 @@ export function authorizeUrl(state: string, redirectUri: string): string {
 
 type TokenResponse = { access_token: string; refresh_token: string; expires_in: number; x_refresh_token_expires_in: number };
 
+/** Intuit refused the grant: the refresh token expired, was revoked, or the code was already used. */
+export class InvalidGrantError extends Error {}
+
+const basicAuth = () => `Basic ${Buffer.from(`${env("QBO_CLIENT_ID")}:${env("QBO_CLIENT_SECRET")}`).toString("base64")}`;
+
 async function tokenRequest(body: Record<string, string>): Promise<TokenResponse> {
-  const basic = Buffer.from(`${env("QBO_CLIENT_ID")}:${env("QBO_CLIENT_SECRET")}`).toString("base64");
-  const res = await fetch(process.env.QBO_TOKEN_URL ?? TOKEN_URL, {
+  const basic = basicAuth().slice(6);
+  const res = await fetch((await oauthEndpoints()).token_endpoint, {
     method: "POST",
     headers: { Authorization: `Basic ${basic}`, Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(body).toString(),
   });
   const text = await res.text();
-  if (!res.ok) throw new Error(`Intuit sign-in request failed (${res.status}): ${text.slice(0, 300)}`);
+  if (!res.ok) {
+    if (/invalid_grant/.test(text)) throw new InvalidGrantError("Intuit no longer accepts this sign-in (invalid_grant).");
+    throw new Error(`Intuit sign-in request failed (${res.status}): ${text.slice(0, 300)}`);
+  }
   return JSON.parse(text) as TokenResponse;
+}
+
+/** Tell Intuit to cancel a token, so a disconnected company's sign-in can't be used anywhere. */
+export async function revokeToken(token: string): Promise<void> {
+  const res = await fetch((await oauthEndpoints()).revocation_endpoint, {
+    method: "POST",
+    headers: { Authorization: basicAuth(), Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok && res.status !== 400) throw new Error(`Intuit didn't confirm the disconnect (${res.status}).`);
 }
 
 export const exchangeCode = (code: string, redirectUri: string) =>
@@ -89,16 +149,26 @@ async function accessTokenFor(companyId: string): Promise<{ token: string; realm
     throw new Error(`The QuickBooks sign-in for '${row.alias}' has expired. An admin needs to reconnect it.`);
   }
   // Intuit rotates refresh tokens; lock the row so two requests never refresh with the same one.
-  return db.transaction(async (tx) => {
+  const refreshed = await db.transaction(async (tx) => {
     const locked = await tx.execute(sql`select access_token_enc, refresh_token_enc, access_token_expires_at, realm_id from companies where id = ${companyId} for update`);
     const r = locked.rows[0] as { access_token_enc: string | null; refresh_token_enc: string; access_token_expires_at: Date | null; realm_id: string };
     if (r.access_token_enc && r.access_token_expires_at && new Date(r.access_token_expires_at).getTime() > Date.now()) {
       return { token: open(r.access_token_enc, row.alias), realmId: r.realm_id };
     }
-    const t = await tokenRequest({ grant_type: "refresh_token", refresh_token: open(r.refresh_token_enc, row.alias) });
-    await tx.update(companies).set(tokenColumns(t)).where(eq(companies.id, companyId));
-    return { token: t.access_token, realmId: r.realm_id };
+    try {
+      const t = await tokenRequest({ grant_type: "refresh_token", refresh_token: open(r.refresh_token_enc, row.alias) });
+      await tx.update(companies).set(tokenColumns(t)).where(eq(companies.id, companyId));
+      return { token: t.access_token, realmId: r.realm_id };
+    } catch (e) {
+      if (!(e instanceof InvalidGrantError)) throw e;
+      // The sign-in is dead (expired or revoked in QuickBooks). Forget it so the company shows as
+      // disconnected, and ask for a reconnect instead of retrying.
+      await tx.update(companies).set({ accessTokenEnc: null, refreshTokenEnc: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null }).where(eq(companies.id, companyId));
+      return null;
+    }
   });
+  if (!refreshed) throw new Error(`The QuickBooks sign-in for '${row.alias}' has expired or was revoked. An admin needs to reconnect it on the Companies page.`);
+  return refreshed;
 }
 
 export class QboError extends Error {

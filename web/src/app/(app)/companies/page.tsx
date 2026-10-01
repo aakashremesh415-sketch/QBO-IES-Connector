@@ -10,7 +10,7 @@ import { requireAdmin } from "@/lib/session";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Companies" };
 
-export default async function CompaniesPage({ searchParams }: { searchParams: { error?: string; connected?: string } }) {
+export default async function CompaniesPage({ searchParams }: { searchParams: { error?: string; connected?: string; notice?: string } }) {
   await requireAdmin();
   const list = await db.select().from(companies).orderBy(asc(companies.alias));
   const env = qboEnvironment();
@@ -19,6 +19,7 @@ export default async function CompaniesPage({ searchParams }: { searchParams: { 
       <PageHeader title="Companies" subtitle="Each Intuit Enterprise Suite entity is connected separately. Sign in as an admin of that company when Intuit asks." />
       {searchParams.error && <div className="banner-bad mb-4" role="alert">{searchParams.error}</div>}
       {searchParams.connected && <div className="banner-ok mb-4">Connected <b>{searchParams.connected}</b>.</div>}
+      {searchParams.notice && <div className="banner-info mb-4">{searchParams.notice}</div>}
       {env === "production" && <div className="banner-warn mb-4">This site is set to <b>production</b>: companies you connect are your real books.</div>}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">

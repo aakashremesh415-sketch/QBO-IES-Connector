@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(new URL(`/companies?error=${encodeURIComponent("Use 2-31 lower-case letters, numbers or dashes for the alias, e.g. us-parent.")}`, req.url));
   }
   try {
-    return NextResponse.redirect(authorizeUrl(signState({ alias, userId: user.id }), qboRedirectUri()));
+    return NextResponse.redirect(await authorizeUrl(signState({ alias, userId: user.id }), qboRedirectUri()));
   } catch (e) {
     return NextResponse.redirect(new URL(`/companies?error=${encodeURIComponent((e as Error).message)}`, req.url));
   }

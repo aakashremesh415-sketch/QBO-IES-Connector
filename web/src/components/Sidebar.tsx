@@ -16,6 +16,7 @@ const ICONS: Record<string, string> = {
   users: "M16 19v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 10a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7M21 19v-1a4 4 0 0 0-3-3.9M16 3.1a3.5 3.5 0 0 1 0 6.8",
   building: "M4 21V4h11v17M15 9h5v12M8 8h3M8 12h3M8 16h3",
   shield: "M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z",
+  help: "M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18",
 };
 
 function Icon({ name }: { name: string }) {
@@ -45,6 +46,7 @@ export default function Sidebar({ alias, isAdmin }: { alias: string | null; isAd
       items: [
         { href: "/shared", label: "Shared COA", icon: "share", match: "^/shared" },
         { href: "/jobs", label: "Activity", icon: "clock", match: "^/jobs" },
+        { href: "/support", label: "Help & support", icon: "help", match: "^/support" },
       ],
     },
     ...(isAdmin

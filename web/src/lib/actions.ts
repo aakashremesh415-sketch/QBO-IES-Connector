@@ -4,11 +4,14 @@ import { randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
 import { and, eq, ne } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db } from "@/db";
 import { companies, companyAccess, roleEnum, users } from "@/db/schema";
 import { audit } from "@/lib/audit";
 import { requireAdmin, requireUser } from "@/lib/session";
+import { decryptSecret } from "@/lib/crypto";
+import { revokeToken } from "@/lib/qbo/client";
 
 export type ActionState = { ok?: string; error?: string; tempPassword?: string };
 
@@ -103,9 +106,18 @@ export async function disconnectCompany(_: ActionState, form: FormData): Promise
   const id = String(form.get("id") ?? "");
   const c = await db.query.companies.findFirst({ where: eq(companies.id, id) });
   if (!c) return { error: "Company not found." };
-  // Tokens are wiped; job history stays so the audit trail is kept.
+  // Cancel the sign-in at Intuit too, then wipe it here. Job history stays for the audit trail.
+  let revokeNote = "";
+  if (c.refreshTokenEnc) {
+    try {
+      await revokeToken(decryptSecret(c.refreshTokenEnc));
+    } catch (e) {
+      revokeNote = ` Intuit couldn't be reached to cancel the sign-in (${(e as Error).message}); you can also disconnect the app inside QuickBooks.`;
+    }
+  }
   await db.update(companies).set({ accessTokenEnc: null, refreshTokenEnc: null, accessTokenExpiresAt: null, refreshTokenExpiresAt: null }).where(eq(companies.id, id));
   await audit(admin.id, "company.disconnect", c.alias);
   revalidatePath("/companies");
-  return { ok: `Disconnected ${c.alias}. Its saved sign-in was deleted; history is kept.` };
+  // The Disconnect button disappears with the connection, so report the result on the page itself.
+  redirect(`/companies?notice=${encodeURIComponent(`Disconnected ${c.alias}. Its sign-in was cancelled and deleted; history is kept.${revokeNote}`)}`);
 }

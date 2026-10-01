@@ -23,5 +23,5 @@ export default function middleware(req: NextRequestWithAuth, event: NextFetchEve
 }
 
 export const config = {
-  matcher: ["/((?!login|setup-check|terms|privacy|disconnected|api/auth|_next/static|_next/image|favicon.ico|icon.svg).*)"],
+  matcher: ["/((?!login|setup-check|terms|privacy|disconnected|support|api/auth|_next/static|_next/image|favicon.ico|icon.svg).*)"],
 };
