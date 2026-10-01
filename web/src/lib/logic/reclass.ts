@@ -30,8 +30,12 @@ export type Candidate = {
   className: string;
   amount: string;
   entity: string | null;
+  /** The old accounts this transaction has lines on. */
+  accountIds: string[];
   skipReason: string;
 };
+
+export const candidateKey = (c: { txnType: string; txnId: string }) => `${c.txnType}|${c.txnId}`;
 
 /** Switch every *AccountRef whose value is in mapping; returns how many were switched. */
 export function replaceAccountRefs(obj: unknown, mapping: Record<string, string>): number {
@@ -59,7 +63,7 @@ export function findCandidates(lines: GLLine[], includeReconciled: boolean): Can
     let entry = byTxn.get(key);
     if (!entry) {
       entry = {
-        c: { txnType: l.txnType, txnId: l.txnId, txnDate: l.txnDate, docNum: l.docNum, name: l.name, className: l.className, amount: "", entity: TXN_TYPES[l.txnType] ?? null, skipReason: "" },
+        c: { txnType: l.txnType, txnId: l.txnId, txnDate: l.txnDate, docNum: l.docNum, name: l.name, className: l.className, amount: "", entity: TXN_TYPES[l.txnType] ?? null, accountIds: [], skipReason: "" },
         lines: [],
       };
       byTxn.set(key, entry);
@@ -70,6 +74,7 @@ export function findCandidates(lines: GLLine[], includeReconciled: boolean): Can
   for (const { c, lines: ls } of byTxn.values()) {
     c.amount = fmt(ls.reduce((s, l) => s + netDebit(l), 0));
     c.className = [...new Set(ls.map((l) => l.className).filter(Boolean))].join(", ");
+    c.accountIds = [...new Set(ls.map((l) => l.accountId))];
     if (!c.txnId) c.skipReason = "No transaction id in the ledger report.";
     else if (!c.entity) c.skipReason = `'${c.txnType}' transactions can't be changed through the API; change these by hand.`;
     else if (!includeReconciled && ls.some((l) => l.cleared === "R")) c.skipReason = "Reconciled. Tick 'Include reconciled' to move it anyway.";

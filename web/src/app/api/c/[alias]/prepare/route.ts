@@ -15,16 +15,21 @@ export const maxDuration = 60;
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date like 2026-09-30");
 const optDate = z.union([date, z.literal("")]).optional();
 const ids = z.array(z.string().min(1)).min(1, "Choose at least one account").max(200);
+const pairs = z.array(z.object({ fromId: z.string().min(1), toId: z.string().min(1, "Choose a new account on every row") }))
+  .min(1, "Add at least one old account -> new account row").max(200);
 
 const Body = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("accounts"), csv: z.string().min(1, "Paste or upload a CSV").max(2_000_000), source: z.string().max(200).default("pasted CSV") }),
   z.object({ kind: z.literal("inactivate"), accountIds: ids }),
   z.object({
-    kind: z.literal("transfer"), fromIds: ids, toId: z.string().min(1, "Choose the account to move into"), asOf: date, date: optDate,
+    kind: z.literal("transfer"), pairs, asOf: date, date: optDate,
     plStart: optDate, docNumber: z.string().max(21).optional(), memo: z.string().max(4000).optional(), amountsCsv: z.string().max(1_000_000).optional(),
   }),
   z.object({ kind: z.literal("reverse"), journalId: z.string().regex(/^\d+$/, "Journal entry Id is a number"), date }),
-  z.object({ kind: z.literal("move"), fromIds: ids, toId: z.string().min(1), start: optDate, end: optDate, includeReconciled: z.boolean().optional() }),
+  z.object({
+    kind: z.literal("move"), pairs, start: optDate, end: optDate, includeReconciled: z.boolean().optional(),
+    selected: z.array(z.object({ key: z.string().min(1).max(200), toId: z.string().optional() })).max(5000).optional(),
+  }),
 ]);
 
 export async function POST(req: Request, { params }: { params: { alias: string } }) {

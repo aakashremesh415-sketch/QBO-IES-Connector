@@ -1,4 +1,5 @@
 import PageHeader from "@/components/PageHeader";
+import { RefreshButton } from "@/components/MappingEditor";
 import { companyForUser, requireUser } from "@/lib/session";
 import { accountOptions } from "@/lib/companyData";
 import AccountsClient from "./AccountsClient";
@@ -16,7 +17,7 @@ export default async function AccountsPage({ params }: { params: { alias: string
       <PageHeader
         title="Chart of accounts"
         subtitle="Create, edit, inactivate and reactivate accounts in bulk from a spreadsheet. Every row is checked first; nothing changes until it's confirmed."
-        actions={<a className="btn-secondary" href={`/api/c/${encodeURIComponent(company.alias)}/accounts.csv`}>Export to CSV</a>}
+        actions={<><RefreshButton /><a className="btn-secondary" href={`/api/c/${encodeURIComponent(company.alias)}/accounts.csv`}>Export to CSV</a></>}
       />
       {error ? <div className="banner-bad" role="alert">{error}</div> : <AccountsClient alias={company.alias} accounts={accounts} />}
     </>

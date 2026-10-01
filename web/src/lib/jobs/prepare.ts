@@ -9,10 +9,10 @@ import { csvRecords } from "@/lib/logic/csv";
 import { BeginningBalanceError, EARLIEST, GL_COLUMNS, fiscalYearStart, monthNumber, parseGl, type GLLine } from "@/lib/logic/gl";
 import { accountIndex, classIndex, customerIndex, locationIndex, vendorIndex, type NameIndex } from "@/lib/logic/lookups";
 import { fmt } from "@/lib/logic/money";
-import { findCandidates } from "@/lib/logic/reclass";
+import { candidateKey, findCandidates } from "@/lib/logic/reclass";
 import {
-  acctRef, buildLines, checkAccounts, compareToQuickBooks, groupsFromGl, groupsFromRows, journalBody, reversalBody,
-  PROFIT_AND_LOSS, TransferError, type TransferGroup,
+  acctRef, buildLines, checkAccounts, checkMapping, compareToQuickBooks, groupsFromGl, groupsFromRows, journalBody, reversalBody,
+  PROFIT_AND_LOSS, TransferError, type Pair, type TransferGroup,
 } from "@/lib/logic/transfer";
 
 export type PreparedItem = { label: string; action: string; detail?: string; payload?: Record<string, unknown>; status: "READY" | "ERROR" | "SKIPPED"; message?: string };
@@ -59,9 +59,11 @@ export async function prepareAccounts(qbo: Qbo, rows: Record<string, string>[], 
 
 /* ---------- balance transfer ---------- */
 
+/** One row of an old account -> new account mapping, as account Ids. */
+export type PairInput = { fromId: string; toId: string };
+
 export type TransferInput = {
-  fromIds: string[];
-  toId: string;
+  pairs: PairInput[];
   asOf: string;
   date?: string;
   plStart?: string;
@@ -83,12 +85,20 @@ async function fillMissingIds(qbo: Qbo, groups: TransferGroup[]) {
   await resolve(groups.filter((g) => g.entityType === "Vendor").map((g) => g.entity), async () => vendorIndex(await qbo.query("SELECT * FROM Vendor")));
 }
 
+function resolvePairs(index: NameIndex, pairs: PairInput[]): Pair[] {
+  return pairs.map((p) => {
+    const from = index.byId.get(p.fromId);
+    const to = index.byId.get(p.toId);
+    if (!from || !to) throw new PrepareError("One of the chosen accounts no longer exists in QuickBooks. Reload the page and choose again.");
+    return { from, to };
+  });
+}
+
 export async function prepareTransfer(qbo: Qbo, input: TransferInput, today: string): Promise<Prepared> {
   const index = accountIndex(await loadAccounts(qbo));
-  const from = input.fromIds.map((id) => index.byId.get(id)).filter((a): a is Entity => !!a);
-  const to = index.byId.get(input.toId);
-  if (!to) throw new PrepareError("Choose the account to move the balances into.");
-  if (from.length !== input.fromIds.length) throw new PrepareError("One of the source accounts no longer exists. Reload the page.");
+  const pairs = resolvePairs(index, input.pairs);
+  const from = pairs.map((p) => p.from);
+  const toById = new Map(pairs.map((p) => [p.from.Id, acctRef(p.to)]));
   const prefs = await qbo.preferences();
   const home = prefs?.CurrencyPrefs?.HomeCurrency?.value ?? "";
   const txnDate = input.date || input.asOf;
@@ -97,7 +107,7 @@ export async function prepareTransfer(qbo: Qbo, input: TransferInput, today: str
   let warnings: string[];
 
   try {
-    warnings = checkAccounts(from, to, index, home);
+    warnings = checkAccounts(pairs, index, home);
     if (input.amountsCsv?.trim()) {
       const { headers, records } = csvRecords(input.amountsCsv);
       if (!headers.includes("from_account") || !headers.includes("amount")) throw new TransferError("The amounts file needs 'from_account' and 'amount' columns.");
@@ -108,9 +118,8 @@ export async function prepareTransfer(qbo: Qbo, input: TransferInput, today: str
         customers: need("customer_or_vendor") ? customerIndex(await qbo.query("SELECT * FROM Customer")) : undefined,
         vendors: need("customer_or_vendor") ? vendorIndex(await qbo.query("SELECT * FROM Vendor")) : undefined,
       });
-      const allowed = new Set(input.fromIds);
-      const stray = [...new Set(groups.filter((g) => !allowed.has(g.from.id)).map((g) => g.from.name))];
-      if (stray.length) throw new TransferError(`The amounts file mentions accounts you didn't choose as sources: ${stray.join(", ")}.`);
+      const stray = [...new Set(groups.filter((g) => !toById.has(g.from.id)).map((g) => g.from.name))];
+      if (stray.length) throw new TransferError(`The amounts file mentions accounts that aren't in your mapping: ${stray.join(", ")}.`);
     } else {
       const bs = from.filter((a) => !PROFIT_AND_LOSS.includes(a.Classification)).map((a) => a.Id);
       const pl = from.filter((a) => PROFIT_AND_LOSS.includes(a.Classification)).map((a) => a.Id);
@@ -124,16 +133,22 @@ export async function prepareTransfer(qbo: Qbo, input: TransferInput, today: str
       await fillMissingIds(qbo, groups);
       notes.push(...compareToQuickBooks(groups, from, input.asOf, today));
     }
-    if (!groups.length) throw new TransferError("All the source accounts already have a zero balance. Nothing to transfer.");
-    const lines = buildLines(groups, acctRef(to), input.memo ?? "");
-    const body = journalBody(lines, txnDate, input.docNumber ?? "", input.memo || `Balance transfer to ${to.FullyQualifiedName} as of ${input.asOf}`);
+    if (!groups.length) throw new TransferError("All the old accounts already have a zero balance. Nothing to transfer.");
+    const lines = buildLines(groups, (id) => toById.get(id)!, input.memo ?? "");
+    const destinations = [...new Set(pairs.map((p) => p.to.FullyQualifiedName))];
+    const intoText = destinations.length === 1 ? destinations[0] : `${destinations.length} accounts`;
+    const body = journalBody(lines, txnDate, input.docNumber ?? "", input.memo || `Balance transfer of ${from.length} account(s) into ${intoText} as of ${input.asOf}`);
     const total = lines.filter((l) => l.posting === "Debit").reduce((s, l) => s + l.amount, 0);
     return {
       kind: "transfer",
-      title: `Balance transfer into ${to.FullyQualifiedName}`,
-      params: { ...input, amountsCsv: input.amountsCsv ? "(file provided)" : undefined, fromNames: from.map((a) => a.FullyQualifiedName), toName: to.FullyQualifiedName },
+      title: `Balance transfer: ${from.length} account${from.length === 1 ? "" : "s"} into ${intoText}`,
+      params: {
+        ...input, amountsCsv: input.amountsCsv ? "(file provided)" : undefined,
+        mapping: pairs.map((p) => ({ from: p.from.FullyQualifiedName, to: p.to.FullyQualifiedName })),
+      },
       preview: {
         txnDate, docNumber: input.docNumber ?? "", total, warnings, notes,
+        mapping: pairs.map((p) => ({ from: p.from.FullyQualifiedName, to: p.to.FullyQualifiedName })),
         lines: lines.map((l) => ({
           account: l.account.name, posting: l.posting, amount: l.amount, className: l.klass?.name ?? "", location: l.location?.name ?? "",
           entity: l.entity?.name ?? "", destination: l.destination,
@@ -169,33 +184,88 @@ export async function prepareReverse(qbo: Qbo, journalId: string, date: string):
 
 /* ---------- move transactions ---------- */
 
-export type MoveInput = { fromIds: string[]; toId: string; start?: string; end?: string; includeReconciled?: boolean };
+export type MoveInput = {
+  pairs: PairInput[];
+  start?: string;
+  end?: string;
+  includeReconciled?: boolean;
+  /** Transaction-level mode: only these transactions, each optionally sent to its own new account. */
+  selected?: { key: string; toId?: string }[];
+};
 
-export async function prepareMove(qbo: Qbo, input: MoveInput, today: string): Promise<Prepared> {
+async function moveContext(qbo: Qbo, input: MoveInput, today: string) {
   const index = accountIndex(await loadAccounts(qbo));
-  const from = input.fromIds.map((id) => index.byId.get(id)).filter((a): a is Entity => !!a);
-  const to = index.byId.get(input.toId);
-  if (!to || !from.length) throw new PrepareError("Choose the old accounts and the new account.");
-  if (from.some((a) => a.Id === to.Id)) throw new PrepareError("The new account can't also be one of the old accounts.");
-  if (to.Active === false) throw new PrepareError("The new account is inactive.");
+  const pairs = resolvePairs(index, input.pairs);
+  try {
+    checkMapping(pairs);
+  } catch (e) {
+    throw new PrepareError((e as Error).message);
+  }
   const start = input.start || EARLIEST;
   const end = input.end || today;
-  const candidates = findCandidates(await fetchGl(qbo, from.map((a) => a.Id), start, end), !!input.includeReconciled);
+  const candidates = findCandidates(await fetchGl(qbo, pairs.map((p) => p.from.Id), start, end), !!input.includeReconciled);
+  return { index, pairs, start, end, candidates };
+}
+
+/** Read-only list of the transactions in the old accounts, for picking individual ones. */
+export async function listMoveCandidates(qbo: Qbo, input: MoveInput, today: string) {
+  const { index, pairs, candidates } = await moveContext(qbo, input, today);
+  if (candidates.length > 5000) throw new PrepareError(`${candidates.length} transactions found. Use a shorter date range (at most 5,000 at a time).`);
+  const toFor = new Map(pairs.map((p) => [p.from.Id, p.to.Id]));
+  return candidates.map((c) => ({
+    key: candidateKey(c), txnType: c.txnType, txnId: c.txnId, txnDate: c.txnDate, docNum: c.docNum, name: c.name,
+    className: c.className, amount: c.amount, skipReason: c.skipReason,
+    accounts: c.accountIds.map((id) => index.byId.get(id)?.FullyQualifiedName ?? id),
+    defaultToId: toFor.get(c.accountIds[0]) ?? "",
+  }));
+}
+
+export async function prepareMove(qbo: Qbo, input: MoveInput, today: string): Promise<Prepared> {
+  const { index, pairs, start, end, candidates: all } = await moveContext(qbo, input, today);
+  const pairMap: Record<string, string> = Object.fromEntries(pairs.map((p) => [p.from.Id, p.to.Id]));
+  const sources = new Set(Object.keys(pairMap));
+
+  let candidates = all;
+  const overrides = new Map<string, string>();
+  if (input.selected) {
+    if (!input.selected.length) throw new PrepareError("Tick at least one transaction.");
+    for (const s of input.selected) {
+      if (!s.toId) continue;
+      const to = index.byId.get(s.toId);
+      if (!to || to.Active === false) throw new PrepareError("One of the chosen new accounts doesn't exist or is inactive. Reload and choose again.");
+      if (sources.has(s.toId)) throw new PrepareError(`'${to.FullyQualifiedName}' is one of the old accounts, so it can't also be a new account.`);
+      overrides.set(s.key, s.toId);
+    }
+    // Only transactions the server itself found in the old accounts can be chosen.
+    const wanted = new Set(input.selected.map((s) => s.key));
+    candidates = all.filter((c) => wanted.has(candidateKey(c)));
+    if (!candidates.length) throw new PrepareError("None of the ticked transactions are in the old accounts any more. Find them again.");
+  }
   if (candidates.length > 5000) throw new PrepareError(`${candidates.length} transactions found. Use a shorter date range (at most 5,000 per run).`);
-  const mapping = Object.fromEntries(from.map((a) => [a.Id, to.Id]));
+
+  const destinations = [...new Set([...pairs.map((p) => p.to.FullyQualifiedName), ...[...overrides.values()].map((id) => index.byId.get(id)!.FullyQualifiedName)])];
   return {
     kind: "move",
-    title: `Move transactions into ${to.FullyQualifiedName}`,
-    params: { ...input, start, end, fromNames: from.map((a) => a.FullyQualifiedName), toName: to.FullyQualifiedName },
+    title: `Move ${input.selected ? `${candidates.length} chosen transaction(s)` : "transactions"} into ${destinations.length === 1 ? destinations[0] : `${destinations.length} accounts`}`,
+    params: {
+      start, end, includeReconciled: !!input.includeReconciled, mode: input.selected ? "pick" : "all",
+      mapping: pairs.map((p) => ({ from: p.from.FullyQualifiedName, to: p.to.FullyQualifiedName })),
+    },
     preview: { found: candidates.length },
-    items: candidates.map((c) => ({
-      label: `${c.txnType} ${c.docNum || c.txnId}`,
-      action: "move",
-      detail: [c.txnDate, c.name, c.className, c.amount].filter(Boolean).join(" · "),
-      payload: { entity: c.entity, txnId: c.txnId, mapping },
-      status: c.skipReason ? "SKIPPED" : "READY",
-      message: c.skipReason,
-    })),
+    items: candidates.map((c) => {
+      const override = overrides.get(candidateKey(c));
+      // Each old account on this transaction goes to its own new account, unless one was chosen for the whole transaction.
+      const mapping = Object.fromEntries(c.accountIds.map((id) => [id, override ?? pairMap[id]]));
+      const into = [...new Set(Object.values(mapping))].map((id) => index.byId.get(id)?.FullyQualifiedName ?? id).join(", ");
+      return {
+        label: `${c.txnType} ${c.docNum || c.txnId}`,
+        action: "move",
+        detail: [c.txnDate, c.name, c.className, c.amount, `→ ${into}`].filter(Boolean).join(" · "),
+        payload: { entity: c.entity, txnId: c.txnId, mapping },
+        status: c.skipReason ? "SKIPPED" : "READY",
+        message: c.skipReason,
+      };
+    }),
   };
 }
 

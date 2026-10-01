@@ -1,4 +1,5 @@
 import PageHeader from "@/components/PageHeader";
+import { RefreshButton } from "@/components/MappingEditor";
 import { companyForUser, requireUser } from "@/lib/session";
 import { accountOptions } from "@/lib/companyData";
 import InactivateClient from "./InactivateClient";
@@ -13,7 +14,7 @@ export default async function InactivatePage({ params }: { params: { alias: stri
   const { accounts, error } = await accountOptions(company);
   return (
     <>
-      <PageHeader title="Make accounts inactive" subtitle="Tick the accounts to retire. Balance sheet accounts must be at zero first, so run a balance transfer before this. Income and expense accounts keep their history in reports." />
+      <PageHeader title="Make accounts inactive" subtitle="Tick the accounts to retire. Balance sheet accounts must be at zero first, so run a balance transfer before this. Income and expense accounts keep their history in reports." actions={<RefreshButton />} />
       {error ? <div className="banner-bad" role="alert">{error}</div> : <InactivateClient alias={company.alias} accounts={accounts.filter((a) => a.active)} />}
     </>
   );

@@ -5,7 +5,7 @@ import { BeginningBalanceError, fiscalYearStart, parseGl, type GLLine } from "@/
 import { fmt, toCents } from "@/lib/logic/money";
 import { findCandidates, replaceAccountRefs } from "@/lib/logic/reclass";
 import {
-  acctRef, buildLines, checkAccounts, groupsFromGl, groupsFromRows, journalBody, reversalBody, TransferError,
+  acctRef, buildLines, checkAccounts, checkMapping, groupsFromGl, groupsFromRows, journalBody, reversalBody, TransferError,
 } from "@/lib/logic/transfer";
 import { acct, glReport, glRow, index } from "./helpers";
 
@@ -66,7 +66,7 @@ describe("balance transfer", () => {
       gl("5", 750),
     ], byId);
     expect(groups).toHaveLength(5);
-    const lines = buildLines(groups, acctRef(NEW), "");
+    const lines = buildLines(groups, () => acctRef(NEW), "");
     const dest = Object.fromEntries(lines.filter((l) => l.destination).map((l) => [l.klass?.name ?? "-", [l.posting, l.amount]]));
     expect(dest).toEqual({ East: ["Debit", 13000], West: ["Debit", 4000], "-": ["Debit", 750] });
     const body = journalBody(lines, "2026-09-30", "RC-1", "note") as any;
@@ -77,20 +77,42 @@ describe("balance transfer", () => {
   it("needs a customer on receivable lines", () => {
     const ar = acct("5", "Old AR", { cls: "Asset", type: "Accounts Receivable" });
     const ar2 = acct("6", "New AR", { cls: "Asset", type: "Accounts Receivable" });
-    expect(() => buildLines(groupsFromGl([gl("5", 8000)], new Map([["5", ar]])), acctRef(ar2), "")).toThrow(/customer/);
-    const lines = buildLines(groupsFromGl([gl("5", 8000, { nameId: "c7", name: "Acme" })], new Map([["5", ar]])), acctRef(ar2), "");
+    expect(() => buildLines(groupsFromGl([gl("5", 8000)], new Map([["5", ar]])), () => acctRef(ar2), "")).toThrow(/customer/);
+    const lines = buildLines(groupsFromGl([gl("5", 8000, { nameId: "c7", name: "Acme" })], new Map([["5", ar]])), () => acctRef(ar2), "");
     const body = journalBody(lines, "2026-09-30", "", "") as any;
     for (const l of body.Line) expect(l.JournalEntryLineDetail.Entity).toEqual({ Type: "Customer", EntityRef: { value: "c7" } });
   });
 
   it("checks accounts", () => {
     const idx = index(...OLD, NEW);
-    expect(checkAccounts(OLD, NEW, idx, "USD")).toEqual([]);
-    expect(() => checkAccounts([NEW], NEW, idx, "USD")).toThrow(/both a source/);
+    const to = (from: typeof OLD, t = NEW) => from.map((f) => ({ from: f, to: t }));
+    expect(checkAccounts(to(OLD), idx, "USD")).toEqual([]);
+    expect(() => checkAccounts(to([NEW]), idx, "USD")).toThrow(/into itself/);
     const parent = acct("7", "Parent"), child = acct("8", "Parent:Child", { parent: "7" });
-    expect(() => checkAccounts([parent], NEW, index(parent, child, NEW), "USD")).toThrow(/sub-accounts/);
+    expect(() => checkAccounts(to([parent]), index(parent, child, NEW), "USD")).toThrow(/sub-accounts/);
     const ar = acct("9", "AR", { cls: "Asset", type: "Accounts Receivable" });
-    expect(() => checkAccounts([ar], acct("10", "Bank", { cls: "Asset", type: "Bank" }), idx, "USD")).toThrow(TransferError);
+    expect(() => checkAccounts(to([ar], acct("10", "Bank", { cls: "Asset", type: "Bank" })), idx, "USD")).toThrow(TransferError);
+  });
+
+  it("refuses chained or duplicated mappings", () => {
+    const [a, b, c] = OLD;
+    expect(() => checkMapping([{ from: a, to: b }, { from: b, to: c }])).toThrow(/both an old account and a new account/);
+    expect(() => checkMapping([{ from: a, to: NEW }, { from: a, to: c }])).toThrow(/more than one row/);
+    expect(() => checkMapping([])).toThrow(/at least one/);
+  });
+
+  it("builds one compound entry with a different new account per old account", () => {
+    const NEW2 = acct("98", "New Other");
+    const groups = groupsFromGl([
+      gl("1", 10000, { classId: "c1", className: "East" }),
+      gl("2", 3000, { classId: "c1", className: "East" }),
+      gl("3", 500, { classId: "c2", className: "West" }),
+    ], byId);
+    const map: Record<string, typeof NEW> = { "1": NEW, "2": NEW2, "3": NEW2 };
+    const lines = buildLines(groups, (id) => acctRef(map[id]), "");
+    const dest = lines.filter((l) => l.destination).map((l) => [l.account.name, l.klass?.name, l.posting, l.amount]);
+    expect(dest).toEqual([["New Combined", "East", "Debit", 10000], ["New Other", "East", "Debit", 3000], ["New Other", "West", "Debit", 500]]);
+    expect(lines.filter((l) => !l.destination)).toHaveLength(3);
   });
 
   it("uses the normal-balance sign for typed amounts", () => {
@@ -157,7 +179,7 @@ describe("moving transactions", () => {
     const c = findCandidates([gl("1", 5, { txnId: "10" }), gl("1", 5, { txnId: "10" }), gl("1", 5, { txnType: "Payroll Check", txnId: "11" }), gl("1", 5, { txnType: "Bill", txnId: "12", cleared: "R" })], false);
     const by = Object.fromEntries(c.map((x) => [x.txnId, x]));
     expect(c).toHaveLength(3);
-    expect(by["10"]).toMatchObject({ skipReason: "", entity: "Purchase" });
+    expect(by["10"]).toMatchObject({ skipReason: "", entity: "Purchase", accountIds: ["1"] });
     expect(by["11"].skipReason).toMatch(/can't be changed/);
     expect(by["12"].skipReason).toMatch(/Reconciled/);
   });

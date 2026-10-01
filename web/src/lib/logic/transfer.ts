@@ -96,17 +96,36 @@ export function groupsFromRows(
   return groups;
 }
 
+export type Pair = { from: Entity; to: Entity };
+
+/**
+ * Rules for an old-account -> new-account mapping, shared by balance transfers and transaction moves.
+ * A destination can't also be a source (A->B with B->C would leave B with A's balance), and each old
+ * account maps to exactly one new account.
+ */
+export function checkMapping(pairs: Pair[]): void {
+  if (!pairs.length) throw new TransferError("Add at least one old account -> new account row.");
+  const sources = new Set<string>();
+  for (const { from, to } of pairs) {
+    if (from.Id === to.Id) throw new TransferError(`'${from.FullyQualifiedName}' can't be moved into itself.`);
+    if (sources.has(from.Id)) throw new TransferError(`'${from.FullyQualifiedName}' appears in more than one row. Each old account maps to one new account.`);
+    sources.add(from.Id);
+    if (to.Active === false) throw new TransferError(`The new account '${to.FullyQualifiedName}' is inactive.`);
+  }
+  for (const { to } of pairs) {
+    if (sources.has(to.Id)) throw new TransferError(`'${to.FullyQualifiedName}' is both an old account and a new account. Split this into two separate runs.`);
+  }
+}
+
 /** Returns warnings; throws for anything that would make a wrong or rejected entry. */
-export function checkAccounts(from: Entity[], to: Entity, index: NameIndex, homeCurrency: string): string[] {
+export function checkAccounts(pairs: Pair[], index: NameIndex, homeCurrency: string): string[] {
+  checkMapping(pairs);
   const warnings: string[] = [];
-  if (to.Active === false) throw new TransferError(`The destination account '${to.FullyQualifiedName}' is inactive.`);
-  if (!from.length) throw new TransferError("Choose at least one account to move balances from.");
-  for (const a of from) {
+  for (const { from: a, to } of pairs) {
     const name = a.FullyQualifiedName;
-    if (a.Id === to.Id) throw new TransferError(`'${name}' is both a source and the destination.`);
     const kids = index.childrenOf(a.Id);
     if (kids.length) {
-      throw new TransferError(`'${name}' has sub-accounts (${kids.map((k) => k.FullyQualifiedName).join(", ")}). Add each sub-account as its own source so every balance is moved.`);
+      throw new TransferError(`'${name}' has sub-accounts (${kids.map((k) => k.FullyQualifiedName).join(", ")}). Add each sub-account as its own row so every balance is moved.`);
     }
     for (const acct of [a, to]) {
       const cur = acct.CurrencyRef?.value;
@@ -115,24 +134,30 @@ export function checkAccounts(from: Entity[], to: Entity, index: NameIndex, home
     if (ENTITY_ACCOUNT_TYPES[a.AccountType] && a.AccountType !== to.AccountType) {
       throw new TransferError(`'${name}' is ${a.AccountType}; its balance can only move to another ${a.AccountType} account.`);
     }
-    if (a.Classification !== to.Classification) warnings.push(`'${name}' is ${a.Classification} but the destination is ${to.Classification}.`);
+    if (a.Classification !== to.Classification) warnings.push(`'${name}' is ${a.Classification} but its new account '${to.FullyQualifiedName}' is ${to.Classification}.`);
     if (a.AccountType === "Bank" || a.AccountType === "Credit Card") warnings.push(`'${name}' is a ${a.AccountType} account: the entry will show in its register and reconciliation.`);
   }
   return warnings;
 }
 
-export function buildLines(groups: TransferGroup[], to: AccountRef, memo: string): JELine[] {
+/**
+ * One compound entry: each balance comes out of its old account and goes into that account's new
+ * account with the same class, location and customer/vendor. Lines into each new account are
+ * combined per class/location/name.
+ */
+export function buildLines(groups: TransferGroup[], toFor: (fromId: string) => AccountRef, memo: string): JELine[] {
   const lines: JELine[] = [];
   const dest = new Map<string, JELine & { signed: number }>();
   for (const g of groups) {
     if (g.entityType && !g.entity?.id && !g.entity?.name) {
       throw new TransferError(`Part of the balance in '${g.from.name}' has no ${g.entityType.toLowerCase()}; QuickBooks requires one on every ${g.from.type} line.`);
     }
+    const to = toFor(g.from.id);
     lines.push({
       posting: g.net > 0 ? "Credit" : "Debit", amount: Math.abs(g.net), account: g.from, klass: g.klass, location: g.location,
       entityType: g.entityType, entity: g.entity, description: memo || `Transfer balance to ${to.name}`, destination: false,
     });
-    const key = [g.klass?.id ?? g.klass?.name ?? "", g.location?.id ?? g.location?.name ?? "", g.entity?.id ?? g.entity?.name ?? ""].join("|");
+    const key = [to.id, g.klass?.id ?? g.klass?.name ?? "", g.location?.id ?? g.location?.name ?? "", g.entity?.id ?? g.entity?.name ?? ""].join("|");
     let d = dest.get(key);
     if (!d) {
       d = { posting: "Debit", amount: 0, signed: 0, account: to, klass: g.klass, location: g.location, entityType: g.entityType, entity: g.entity, description: memo || "Balance transferred in", destination: true };
