@@ -71,7 +71,16 @@ export default async function CompaniesPage({ searchParams }: { searchParams: { 
           <h2 className="section-title mb-3">Connect a company</h2>
           <form action="/api/qbo/connect" method="get" className="grid gap-3">
             <label className="field">Short alias (used to confirm changes)
-              <input className="input" id="alias" name="alias" placeholder="e.g. us-parent" pattern="[a-z0-9][a-z0-9\-]{1,30}" required />
+              <input
+                className="input"
+                id="alias"
+                name="alias"
+                placeholder="e.g. us-parent"
+                pattern="[A-Za-z0-9][A-Za-z0-9\-]{1,30}"
+                title="2-31 letters, numbers or dashes, starting with a letter or number. Saved in lower case."
+                required
+              />
+              <span className="font-normal">Letters, numbers and dashes, no spaces. Saved in lower case (Demo becomes demo).</span>
             </label>
             <button className="btn-primary">Connect to QuickBooks</button>
           </form>
