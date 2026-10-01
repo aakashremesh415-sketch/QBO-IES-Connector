@@ -52,6 +52,7 @@ export default function LoginPage() {
         </div>
         <Suspense><LoginForm /></Suspense>
         <p className="mt-4 text-center text-xs text-ink-muted">Forgot your password? Ask an administrator to reset it.</p>
+        <p className="mt-2 flex justify-center gap-4 text-xs"><a className="link" href="/terms">Terms</a><a className="link" href="/privacy">Privacy</a></p>
       </div>
     </div>
   );

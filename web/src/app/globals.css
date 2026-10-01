@@ -42,3 +42,7 @@ body { @apply bg-canvas text-ink antialiased; font-size: 14px; }
   .banner-bad { @apply banner border-bad/30 bg-bad-light; }
   .banner-ok { @apply banner border-brand/30 bg-brand-light; }
 }
+
+.legal h2 { @apply mt-4 text-lg font-bold text-ink; }
+.legal ul { @apply grid list-disc gap-1 pl-6; }
+.legal a { @apply font-semibold text-info hover:underline; }
