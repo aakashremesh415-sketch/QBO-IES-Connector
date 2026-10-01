@@ -1,0 +1,3 @@
+name,acct_num,account_type,detail_type,parent,description,share_with
+Rent Expense - Combined,6105,Expense,RentOrLeaseOfBuildings,,All rent in one account,us-parent;uk-entity;in-entity
+Intercompany Receivable,1450,Other Current Asset,OtherCurrentAssets,,,us-parent;uk-entity

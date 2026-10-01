@@ -1,0 +1,6 @@
+action,account,name,acct_num,account_type,detail_type,description,parent
+create,,Facilities,6200,Expense,RentOrLeaseOfBuildings,Parent for facility costs,
+create,,Utilities,6210,Expense,Utilities,Power and water,Facilities
+update,6100,Office Rent,,,,Head office rent,
+reactivate,Old Marketing,,,,,,
+inactivate,Old Utilities,,,,,,

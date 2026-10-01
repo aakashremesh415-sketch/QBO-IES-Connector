@@ -1,0 +1,4 @@
+from_account,class,location,customer_or_vendor,amount
+Old Rent 1,East,,,1200.00
+Old Rent 1,West,,,800.00
+Old Rent 2,East,,,450.00
