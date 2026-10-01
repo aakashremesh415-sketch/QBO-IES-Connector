@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: { default: "IES Connector", template: "%s · IES Connector" },
+  title: { default: "Entity Connector", template: "%s · Entity Connector" },
   description: "Bulk chart of accounts and journal tools for Intuit Enterprise Suite",
   robots: { index: false, follow: false },
 };

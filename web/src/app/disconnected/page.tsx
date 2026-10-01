@@ -8,7 +8,7 @@ export default function Disconnected() {
   return (
     <PublicPage title="QuickBooks disconnected">
       <p>
-        IES Connector no longer has access to that QuickBooks company. Nothing more will be read from or written to it.
+        Entity Connector no longer has access to that QuickBooks company. Nothing more will be read from or written to it.
       </p>
       <p>
         The record of past changes is kept for audit purposes. To use the company again, an administrator can reconnect it

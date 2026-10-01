@@ -1,4 +1,4 @@
-# IES Connector (web)
+# Entity Connector (web)
 
 The browser version of the QBO-IES-Connector tools, with user accounts. It runs on **Vercel** with a
 **Neon** Postgres database.
@@ -36,9 +36,15 @@ The browser version of the QBO-IES-Connector tools, with user accounts. It runs 
 1. **Prepare:** the tool reads QuickBooks and saves a preview of every item, marked Ready, Error or Skipped.
 2. **Confirm:** an operator or admin types the company alias. With `REQUIRE_SECOND_APPROVER=true`, it
    must be someone other than the person who prepared it. Previews older than 4 hours must be prepared again.
+   Before confirming, **review** the items: leave any out (one by one or in bulk) and put them back. Only
+   what's left in is saved. For transfers and moves, **Change and prepare again** reopens the form filled in.
 3. **Run:** items are saved one at a time, in short steps, so large jobs don't hit Vercel's time limit.
    Keep the page open; reopening it carries on from where it stopped.
-4. **Results:** each item's result is stored. Anything interrupted mid-save is marked Failed and never
+4. **Undo:** a finished chart of accounts or move job can be undone with **Prepare undo**. Account
+   changes are put back, new accounts are made inactive (QuickBooks can't delete accounts) and moved
+   lines go back to their old account. Anything edited in QuickBooks since is left alone. The undo is
+   itself a preview you review and confirm. Journal entries are undone with **Prepare reversal**.
+5. **Results:** each item's result is stored. Anything interrupted mid-save is marked Failed and never
    retried automatically, because it may already be in QuickBooks.
 
 ## Deploy to Vercel + Neon

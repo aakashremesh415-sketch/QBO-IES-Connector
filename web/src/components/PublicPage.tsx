@@ -9,7 +9,7 @@ export default function PublicPage({ title, updated, children }: { title: string
           <span className="grid h-8 w-8 place-items-center rounded-md bg-brand">
             <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="#fff" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 9h11l-3-3M18 15H7l3 3" /></svg>
           </span>
-          <span className="font-bold">IES Connector</span>
+          <span className="font-bold">Entity Connector</span>
         </Link>
         <h1 className="text-[26px] font-bold leading-tight">{title}</h1>
         {updated && <p className="mt-1 text-sm text-ink-muted">Last updated {updated}</p>}

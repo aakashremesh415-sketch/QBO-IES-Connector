@@ -68,7 +68,7 @@ export default function Sidebar({ alias, isAdmin }: { alias: string | null; isAd
         <span className="grid h-8 w-8 place-items-center rounded-md bg-brand">
           <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="#fff" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 9h11l-3-3M18 15H7l3 3" /></svg>
         </span>
-        <span className="text-[15px] font-bold leading-tight">IES Connector</span>
+        <span className="text-[15px] font-bold leading-tight">Entity Connector</span>
       </Link>
       <div className="flex-1 overflow-y-auto pb-6">
         {groups.map((g, i) => (

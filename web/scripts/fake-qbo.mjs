@@ -172,6 +172,16 @@ const server = http.createServer(async (req, res) => {
   if (rest.startsWith("companyinfo/")) return send(res, { CompanyInfo: { Id: "1", CompanyName: "Northwind Holdings US", FiscalYearStartMonth: "January", Country: "US" } });
   if (rest === "preferences") return send(res, { Preferences: { CurrencyPrefs: { HomeCurrency: { value: "USD" } } } });
   if (rest === "reports/GeneralLedger") return send(res, generalLedger(url.searchParams));
+  if (rest === "reports/TrialBalance") {
+    const end = url.searchParams.get("end_date") ?? "2999-12-31";
+    const ps = postings().filter((p) => p.date <= end);
+    const rows = accounts.map((a) => {
+      const net = ps.filter((p) => p.accountId === a.Id).reduce((s, p) => s + p.debit - p.credit, 0);
+      return { a, net };
+    }).filter((r) => Math.abs(r.net) > 0.001).map(({ a, net }) => ({ ColData: [{ value: a.FullyQualifiedName, id: a.Id }, { value: net > 0 ? net.toFixed(2) : "" }, { value: net < 0 ? (-net).toFixed(2) : "" }] }));
+    const d = rows.reduce((s, r) => s + Number(r.ColData[1].value || 0), 0), c = rows.reduce((s, r) => s + Number(r.ColData[2].value || 0), 0);
+    return send(res, { Rows: { Row: [...rows, { group: "GrandTotal", Summary: { ColData: [{ value: "TOTAL" }, { value: d.toFixed(2) }, { value: c.toFixed(2) }] } }] } });
+  }
   if (rest === "query") {
     const q = url.searchParams.get("query") ?? "";
     const start = Number(q.match(/STARTPOSITION (\d+)/i)?.[1] ?? 1);

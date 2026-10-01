@@ -3,7 +3,8 @@ import { buildPlan } from "@/lib/logic/accounts";
 import { csvRecords, parseCsv, toCsv } from "@/lib/logic/csv";
 import { BeginningBalanceError, fiscalYearStart, parseGl, type GLLine } from "@/lib/logic/gl";
 import { fmt, toCents } from "@/lib/logic/money";
-import { findCandidates, replaceAccountRefs } from "@/lib/logic/reclass";
+import { parseTrialBalance } from "@/lib/logic/tb";
+import { findCandidates, replaceAccountRefs, trackAccountRefs, undoAccountRefs } from "@/lib/logic/reclass";
 import {
   acctRef, buildLines, checkAccounts, checkMapping, groupsFromGl, groupsFromRows, journalBody, reversalBody, TransferError,
 } from "@/lib/logic/transfer";
@@ -21,6 +22,18 @@ describe("money and csv", () => {
     const { records } = csvRecords("﻿Action,Account\r\ncreate,\r\n");
     expect(records).toEqual([{ action: "create", account: "" }]);
     expect(toCsv(["a"], [{ a: "1,2" }])).toBe('a\r\n"1,2"\r\n');
+  });
+});
+
+describe("trial balance", () => {
+  it("reads accounts with debit/credit and skips totals", () => {
+    const tb = parseTrialBalance({ Rows: { Row: [
+      { ColData: [{ value: "Checking", id: "35" }, { value: "1,000.00" }, { value: "" }] },
+      { type: "Section", Rows: { Row: [{ ColData: [{ value: "Loan", id: "40" }, { value: "" }, { value: "1000" }] }] } },
+      { group: "GrandTotal", Summary: { ColData: [{ value: "TOTAL" }, { value: "1000" }, { value: "1000" }] } },
+    ] } });
+    expect(tb.rows).toEqual([{ id: "35", name: "Checking", debit: 100000, credit: 0 }, { id: "40", name: "Loan", debit: 0, credit: 100000 }]);
+    expect([tb.totalDebit, tb.totalCredit]).toEqual([100000, 100000]);
   });
 });
 
@@ -99,6 +112,9 @@ describe("balance transfer", () => {
     expect(() => checkMapping([{ from: a, to: b }, { from: b, to: c }])).toThrow(/both an old account and a new account/);
     expect(() => checkMapping([{ from: a, to: NEW }, { from: a, to: c }])).toThrow(/more than one row/);
     expect(() => checkMapping([])).toThrow(/at least one/);
+    const ar = acct("20", "AR", { cls: "Asset", type: "Accounts Receivable" });
+    expect(() => checkMapping([{ from: ar, to: NEW }])).toThrow(/Accounts Receivable can only be mapped/);
+    expect(() => checkMapping([{ from: NEW, to: ar }])).toThrow(/Accounts Receivable can only be mapped/);
   });
 
   it("builds one compound entry with a different new account per old account", () => {
@@ -175,6 +191,15 @@ describe("moving transactions", () => {
     expect(p.Line[0].D).toEqual({ AccountRef: { value: "9" }, ClassRef: { value: "c1" } });
     expect(p.Line[1].D.AccountRef.value).toBe("3");
   });
+  it("records each switch and can put it back, leaving later edits alone", () => {
+    const txn: any = { Line: [{ D: { AccountRef: { value: "1" } } }, { D: { AccountRef: { value: "2" } } }], AccountRef: { value: "1" } };
+    const changes = trackAccountRefs(txn, { "1": "9", "2": "8" });
+    expect(changes.map((c) => c.path.join("."))).toEqual(["Line.0.D.AccountRef", "Line.1.D.AccountRef", "AccountRef"]);
+    txn.Line[1].D.AccountRef.value = "7"; // someone changed this line afterwards
+    expect(undoAccountRefs(txn, changes)).toBe(2);
+    expect([txn.Line[0].D.AccountRef.value, txn.Line[1].D.AccountRef.value, txn.AccountRef.value]).toEqual(["1", "7", "1"]);
+  });
+
   it("dedupes and explains skips", () => {
     const c = findCandidates([gl("1", 5, { txnId: "10" }), gl("1", 5, { txnId: "10" }), gl("1", 5, { txnType: "Payroll Check", txnId: "11" }), gl("1", 5, { txnType: "Bill", txnId: "12", cleared: "R" })], false);
     const by = Object.fromEntries(c.map((x) => [x.txnId, x]));

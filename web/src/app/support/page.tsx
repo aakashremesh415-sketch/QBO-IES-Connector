@@ -9,7 +9,7 @@ export default function Support() {
   return (
     <PublicPage title="Help and support">
       <p>
-        For help with IES Connector, a change that didn&apos;t go as expected, or access to a company, contact{" "}
+        For help with Entity Connector, a change that didn&apos;t go as expected, or access to a company, contact{" "}
         {email ? <a href={`mailto:${email}`}>{email}</a> : "your administrator"}.
       </p>
       <h2>Make it quick to sort out</h2>

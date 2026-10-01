@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { parseCsv } from "@/lib/logic/csv";
+import { fmt } from "@/lib/logic/money";
 import { money, type AccountOption } from "./tools";
 
 export type MappingRow = { fromId: string; toId: string };
@@ -26,14 +27,20 @@ function findAccount(accounts: AccountOption[], text: string): AccountOption | n
  * Old account -> new account table. Each old account gets its own new account; several old
  * accounts may share one. Rows can be typed in, set in bulk, or pasted as "old,new" lines.
  */
+/** Net balance in cents (debit positive) shown as "1,200.00 Dr" / "350.00 Cr", the way a trial balance reads. */
+export const drCr = (net: number) => (net === 0 ? "0.00" : `${fmt(Math.abs(net))} ${net > 0 ? "Dr" : "Cr"}`);
+
 export default function MappingEditor({
-  accounts, rows, onChange, oldLabel = "Old account", newLabel = "New account",
+  accounts, rows, onChange, oldLabel = "Old account", newLabel = "New account", balances, balanceLabel = "Balance",
 }: {
   accounts: AccountOption[];
   rows: MappingRow[];
   onChange: (rows: MappingRow[]) => void;
   oldLabel?: string;
   newLabel?: string;
+  /** Trial balance nets by account Id (cents, debit positive); falls back to QuickBooks' current balance. */
+  balances?: Map<string, number>;
+  balanceLabel?: string;
 }) {
   const [paste, setPaste] = useState(false);
   const [pasteText, setPasteText] = useState("");
@@ -70,7 +77,7 @@ export default function MappingEditor({
       <div className="overflow-x-auto rounded border border-line">
         <table className="tbl">
           <thead>
-            <tr><th>{oldLabel}</th><th className="num">Balance</th><th aria-hidden></th><th>{newLabel}</th><th aria-hidden></th></tr>
+            <tr><th>{oldLabel}</th><th className="num">{balances ? balanceLabel : "Balance"}</th><th aria-hidden></th><th>{newLabel}</th><th aria-hidden></th></tr>
           </thead>
           <tbody>
             {rows.map((r, i) => {
@@ -87,7 +94,7 @@ export default function MappingEditor({
                     </select>
                     {from?.isParent && <div className="mt-1 text-xs text-warn">Has sub-accounts: add each sub-account as its own row.</div>}
                   </td>
-                  <td className="num text-ink-muted">{from ? money(from.balance) : ""}</td>
+                  <td className="num whitespace-nowrap text-ink-muted">{from ? (balances ? drCr(balances.get(from.id) ?? 0) : money(from.balance)) : ""}</td>
                   <td className="text-center text-ink-faint" aria-hidden>→</td>
                   <td className="min-w-[14rem]">
                     <select className="input py-1.5" value={r.toId} onChange={(e) => set(i, { toId: e.target.value })} aria-label={`${newLabel}, row ${i + 1}`}>

@@ -48,7 +48,7 @@ export default function LoginPage() {
           <span className="grid h-9 w-9 place-items-center rounded-md bg-brand">
             <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="#fff" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M6 9h11l-3-3M18 15H7l3 3" /></svg>
           </span>
-          <span className="text-lg font-bold">IES Connector</span>
+          <span className="text-lg font-bold">Entity Connector</span>
         </div>
         <Suspense><LoginForm /></Suspense>
         <p className="mt-4 text-center text-xs text-ink-muted">Forgot your password? Ask an administrator to reset it.</p>

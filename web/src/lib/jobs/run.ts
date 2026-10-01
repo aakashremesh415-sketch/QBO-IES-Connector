@@ -9,7 +9,7 @@ import { db, pool } from "@/db";
 import { companies, jobItems, jobs, type Job, type JobItem, type User } from "@/db/schema";
 import { QboClient, QboError, type Qbo } from "@/lib/qbo/client";
 import { applyChange } from "@/lib/logic/accounts";
-import { replaceAccountRefs, sameAccountTransfer } from "@/lib/logic/reclass";
+import { sameAccountTransfer, trackAccountRefs, undoAccountRefs, type RefChange } from "@/lib/logic/reclass";
 import { canConfirm, hasCompanyAccess } from "@/lib/session";
 import { audit } from "@/lib/audit";
 import { itemCounts as counts, readyCount } from "./store";
@@ -60,20 +60,61 @@ async function createdIds(jobId: string): Promise<Record<string, string>> {
   return out;
 }
 
-type Outcome = { status: "DONE" | "SKIPPED"; message: string; resultRef?: string };
+/** What an item needs so it can be undone later; saved on the item when it runs. */
+export type UndoData =
+  | { kind: "inactivate"; accountId: string }
+  | { kind: "restore"; accountId: string; before: Record<string, unknown> }
+  | { kind: "move"; entity: string; txnId: string; changes: RefChange[] };
+
+type Outcome = { status: "DONE" | "SKIPPED"; message: string; resultRef?: string; undo?: UndoData };
+
+// Account fields an update can change, saved before the change so it can be put back.
+const ACCOUNT_FIELDS = ["Name", "AcctNum", "AccountType", "AccountSubType", "Description", "Active", "SubAccount", "ParentRef"];
+const pick = (o: Record<string, any>, keys: string[]) => Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
+
+async function runUndo(qbo: Qbo, u: UndoData): Promise<Outcome> {
+  if (u.kind === "move") {
+    const txn = await qbo.read(u.entity, u.txnId);
+    const n = undoAccountRefs(txn, u.changes);
+    if (n === 0) return { status: "SKIPPED", message: "Nothing to put back: these lines were changed again since, so they were left alone." };
+    await qbo.update(u.entity, txn);
+    return { status: "DONE", message: `${n} line(s) put back on the original account${n === u.changes.length ? "" : ` (${u.changes.length - n} changed since and left alone)`}`, resultRef: u.txnId };
+  }
+  const fresh = await qbo.read("Account", u.accountId);
+  if (u.kind === "inactivate") {
+    // QuickBooks can't delete accounts; making the new one inactive is the closest undo.
+    if (fresh.Active === false) return { status: "SKIPPED", message: "Already inactive." };
+    const done = await qbo.update("Account", { ...fresh, Active: false });
+    return { status: "DONE", message: `Made inactive: ${done.FullyQualifiedName} (QuickBooks doesn't allow deleting accounts)`, resultRef: done.Id };
+  }
+  const body: Record<string, any> = { ...fresh, ...u.before };
+  if (!("ParentRef" in u.before)) {
+    delete body.ParentRef;
+    body.SubAccount = false;
+  }
+  const done = await qbo.update("Account", body);
+  return { status: "DONE", message: `Put back: ${done.FullyQualifiedName}`, resultRef: done.Id };
+}
 
 export async function runItem(qbo: Qbo, job: Job, item: JobItem): Promise<Outcome> {
   const p = item.payload as Record<string, any>;
+  if (item.action === "undo") return runUndo(qbo, p.undo as UndoData);
   switch (job.kind) {
     case "accounts":
     case "inactivate": {
       if (item.action === "create") {
         const created = await qbo.create("Account", applyChange({}, p as any, await createdIds(job.id)));
-        return { status: "DONE", message: `Created ${created.FullyQualifiedName}`, resultRef: created.Id };
+        return { status: "DONE", message: `Created ${created.FullyQualifiedName}`, resultRef: created.Id, undo: { kind: "inactivate", accountId: created.Id } };
       }
       const fresh = await qbo.read("Account", p.accountId); // current SyncToken
+      const before = pick(fresh, ACCOUNT_FIELDS);
       const updated = await qbo.update("Account", applyChange(fresh, p as any, await createdIds(job.id)));
-      return { status: "DONE", message: `${item.action === "update" ? "Updated" : item.action === "inactivate" ? "Made inactive" : "Reactivated"}: ${updated.FullyQualifiedName ?? item.label}`, resultRef: updated.Id };
+      return {
+        status: "DONE",
+        message: `${item.action === "update" ? "Updated" : item.action === "inactivate" ? "Made inactive" : "Reactivated"}: ${updated.FullyQualifiedName ?? item.label}`,
+        resultRef: updated.Id,
+        undo: { kind: "restore", accountId: updated.Id, before },
+      };
     }
     case "transfer":
     case "reverse": {
@@ -83,11 +124,12 @@ export async function runItem(qbo: Qbo, job: Job, item: JobItem): Promise<Outcom
     }
     case "move": {
       const txn = await qbo.read(p.entity, p.txnId); // fresh copy with the current SyncToken
-      const changed = replaceAccountRefs(txn, p.mapping);
+      const changes = trackAccountRefs(txn, p.mapping);
+      const changed = changes.length;
       if (changed === 0) return { status: "SKIPPED", message: "No line points at the old accounts. The account may come from a product/service item or tax setting; change that instead." };
       if (sameAccountTransfer(txn)) return { status: "SKIPPED", message: "Would become a transfer from and to the same account." };
       await qbo.update(p.entity, txn);
-      return { status: "DONE", message: `${changed} line(s) switched`, resultRef: p.txnId };
+      return { status: "DONE", message: `${changed} line(s) switched`, resultRef: p.txnId, undo: { kind: "move", entity: p.entity, txnId: p.txnId, changes } };
     }
   }
 }
@@ -119,7 +161,10 @@ export async function stepJob(job: Job, user: User, qboFor: (companyId: string) 
       await db.update(jobItems).set({ status: "RUNNING", updatedAt: new Date() }).where(eq(jobItems.id, next.id));
       try {
         const out = await runItem(qbo, job, next);
-        await db.update(jobItems).set({ status: out.status, message: out.message.slice(0, 2000), resultRef: out.resultRef ?? null, updatedAt: new Date() }).where(eq(jobItems.id, next.id));
+        await db.update(jobItems).set({
+          status: out.status, message: out.message.slice(0, 2000), resultRef: out.resultRef ?? null, updatedAt: new Date(),
+          ...(out.undo ? { payload: { ...(next.payload as Record<string, unknown>), undo: out.undo } } : {}),
+        }).where(eq(jobItems.id, next.id));
       } catch (e) {
         const msg = e instanceof QboError || e instanceof Error ? e.message : String(e);
         await db.update(jobItems).set({ status: "FAILED", message: msg.slice(0, 2000), updatedAt: new Date() }).where(eq(jobItems.id, next.id));

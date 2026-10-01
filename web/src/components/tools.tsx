@@ -19,7 +19,7 @@ export function money(n: number) {
 }
 
 /** POST to the prepare endpoint and open the resulting preview job. */
-export function usePrepare(alias: string) {
+export function usePrepare(alias: string, replaces?: string) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -27,7 +27,7 @@ export function usePrepare(alias: string) {
     setBusy(true);
     setError("");
     try {
-      const res = await fetch(`/api/c/${encodeURIComponent(alias)}/prepare`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const res = await fetch(`/api/c/${encodeURIComponent(alias)}/prepare`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(replaces ? { ...body, replaces } : body) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Something went wrong (${res.status}).`);
       router.push(`/jobs/${data.id}`);

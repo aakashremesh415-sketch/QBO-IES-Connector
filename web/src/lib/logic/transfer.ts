@@ -115,6 +115,14 @@ export function checkMapping(pairs: Pair[]): void {
   for (const { to } of pairs) {
     if (sources.has(to.Id)) throw new TransferError(`'${to.FullyQualifiedName}' is both an old account and a new account. Split this into two separate runs.`);
   }
+  for (const { from, to } of pairs) {
+    // Receivable/payable lines carry customer and vendor balances; they can only move to another account of the same type.
+    for (const [a, b] of [[from, to], [to, from]]) {
+      if (ENTITY_ACCOUNT_TYPES[a.AccountType] && a.AccountType !== b.AccountType) {
+        throw new TransferError(`'${from.FullyQualifiedName}' → '${to.FullyQualifiedName}': ${a.AccountType} can only be mapped to another ${a.AccountType} account, or customer and vendor balances would break.`);
+      }
+    }
+  }
 }
 
 /** Returns warnings; throws for anything that would make a wrong or rejected entry. */

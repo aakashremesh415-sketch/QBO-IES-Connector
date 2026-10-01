@@ -19,6 +19,8 @@ export const TXN_TYPES: Record<string, string> = {
   "Bill Payment (Check)": "BillPayment",
   "Bill Payment (Credit Card)": "BillPayment",
   Refund: "RefundReceipt",
+  Invoice: "Invoice",
+  "Credit Memo": "CreditMemo",
 };
 
 export type Candidate = {
@@ -37,23 +39,46 @@ export type Candidate = {
 
 export const candidateKey = (c: { txnType: string; txnId: string }) => `${c.txnType}|${c.txnId}`;
 
-/** Switch every *AccountRef whose value is in mapping; returns how many were switched. */
-export function replaceAccountRefs(obj: unknown, mapping: Record<string, string>): number {
-  let count = 0;
+export type RefChange = { path: (string | number)[]; from: string; to: string };
+
+/** Switch every *AccountRef whose value is in mapping, and return where each switch happened. */
+export function trackAccountRefs(obj: unknown, mapping: Record<string, string>, path: (string | number)[] = []): RefChange[] {
+  const changes: RefChange[] = [];
   if (Array.isArray(obj)) {
-    for (const item of obj) count += replaceAccountRefs(item, mapping);
+    obj.forEach((item, i) => changes.push(...trackAccountRefs(item, mapping, [...path, i])));
   } else if (obj && typeof obj === "object") {
     for (const [key, value] of Object.entries(obj as Record<string, any>)) {
       if (key.endsWith("AccountRef") && value && typeof value === "object" && typeof value.value === "string" && value.value in mapping) {
+        changes.push({ path: [...path, key], from: value.value, to: mapping[value.value] });
         value.value = mapping[value.value];
         delete value.name;
-        count++;
       } else {
-        count += replaceAccountRefs(value, mapping);
+        changes.push(...trackAccountRefs(value, mapping, [...path, key]));
       }
     }
   }
-  return count;
+  return changes;
+}
+
+/** Switch every *AccountRef whose value is in mapping; returns how many were switched. */
+export const replaceAccountRefs = (obj: unknown, mapping: Record<string, string>) => trackAccountRefs(obj, mapping).length;
+
+/**
+ * Put recorded switches back, but only where the account is still the one we set; anything
+ * someone changed since is left alone. Returns how many were put back.
+ */
+export function undoAccountRefs(obj: unknown, changes: RefChange[]): number {
+  let undone = 0;
+  for (const c of changes) {
+    let node: any = obj;
+    for (const k of c.path) node = node?.[k];
+    if (node && typeof node === "object" && node.value === c.to) {
+      node.value = c.from;
+      delete node.name;
+      undone++;
+    }
+  }
+  return undone;
 }
 
 export function findCandidates(lines: GLLine[], includeReconciled: boolean): Candidate[] {

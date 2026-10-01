@@ -1,27 +1,45 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import TrialBalance, { type TBRow } from "@/components/TrialBalance";
 import MappingEditor, { completeRows, type MappingRow } from "@/components/MappingEditor";
 import { ErrorBanner, usePrepare, type AccountOption } from "@/components/tools";
+import type { Prefill } from "@/lib/jobs/prefill";
 
-export default function TransferClient({ alias, accounts, today }: { alias: string; accounts: AccountOption[]; today: string }) {
-  const [rows, setRows] = useState<MappingRow[]>([{ fromId: "", toId: "" }]);
-  const [asOf, setAsOf] = useState(today);
-  const [date, setDate] = useState("");
-  const [plStart, setPlStart] = useState("");
-  const [docNumber, setDocNumber] = useState("");
-  const [memo, setMemo] = useState("");
+export default function TransferClient({ alias, accounts, today, prefill }: { alias: string; accounts: AccountOption[]; today: string; prefill: Prefill | null }) {
+  const [rows, setRows] = useState<MappingRow[]>(prefill?.pairs.length ? prefill.pairs : [{ fromId: "", toId: "" }]);
+  const [asOf, setAsOf] = useState(prefill?.asOf ?? today);
+  const [date, setDate] = useState(prefill?.date ?? "");
+  const [plStart, setPlStart] = useState(prefill?.plStart ?? "");
+  const [docNumber, setDocNumber] = useState(prefill?.docNumber ?? "");
+  const [memo, setMemo] = useState(prefill?.memo ?? "");
   const [useFile, setUseFile] = useState(false);
   const [amountsCsv, setAmountsCsv] = useState("");
-  const { prepare, busy, error } = usePrepare(alias);
+  const { prepare, busy, error } = usePrepare(alias, prefill?.replaces);
+  const [tb, setTb] = useState<TBRow[]>([]);
+  const tbNet = useMemo(() => new Map(tb.filter((r) => r.id).map((r) => [r.id, r.debit - r.credit])), [tb]);
+  const inMapping = useMemo(() => new Set(rows.flatMap((r) => [r.fromId, r.toId]).filter(Boolean)), [rows]);
+  const addOld = (id: string) => {
+    const blank = rows.findIndex((r) => !r.fromId);
+    setRows(blank >= 0 ? rows.map((r, i) => (i === blank ? { ...r, fromId: id } : r)) : [...rows, { fromId: id, toId: "" }]);
+  };
   const pairs = completeRows(rows);
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const hasPl = pairs.some((p) => ["Revenue", "Expense"].includes(byId.get(p.fromId)?.classification ?? ""));
   const incomplete = rows.some((r) => (r.fromId && !r.toId) || (!r.fromId && r.toId));
 
   return (
+    <div className="grid gap-5">
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
-      <section className="card card-pad grid min-w-0 gap-3">
+      {prefill && (
+        <div className="banner-info xl:col-span-2">
+          <span>
+            Filled in from your earlier preview. Change anything, then preview again{prefill.replaces ? "; the earlier preview will be cancelled" : ""}.
+            {prefill.amountsUsed && " The amounts you typed last time weren't kept, so paste them again if you need them."}
+          </span>
+        </div>
+      )}
+      <section className="card card-pad grid h-fit min-w-0 content-start gap-3">
         <div>
           <h2 className="section-title">1. Old account → new account</h2>
           <p className="mt-1 text-sm text-ink-muted">
@@ -29,7 +47,7 @@ export default function TransferClient({ alias, accounts, today }: { alias: stri
             compound journal entry, keeping each class, location and customer/vendor.
           </p>
         </div>
-        <MappingEditor accounts={accounts} rows={rows} onChange={setRows} />
+        <MappingEditor accounts={accounts} rows={rows} onChange={setRows} balances={tb.length ? tbNet : undefined} balanceLabel={`TB ${asOf}`} />
       </section>
 
       <section className="card card-pad grid h-fit gap-3">
@@ -57,6 +75,8 @@ export default function TransferClient({ alias, accounts, today }: { alias: stri
           {busy ? "Reading the ledger..." : `Preview journal entry${pairs.length ? ` (${pairs.length} row${pairs.length > 1 ? "s" : ""})` : ""}`}
         </button>
       </section>
+    </div>
+    <TrialBalance alias={alias} asOf={asOf} highlight={inMapping} onLoaded={setTb} onPick={addOld} />
     </div>
   );
 }

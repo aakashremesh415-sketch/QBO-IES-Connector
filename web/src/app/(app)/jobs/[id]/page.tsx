@@ -10,6 +10,9 @@ import { getJob, itemCounts, loadItems } from "@/lib/jobs/store";
 import { PREVIEW_MAX_AGE_HOURS } from "@/lib/jobs/run";
 import { fmt } from "@/lib/logic/money";
 import JobActions from "./JobActions";
+import ItemsTable from "./ItemsTable";
+import UndoButton from "./UndoButton";
+import { UNDOABLE_KINDS, undoableCount } from "@/lib/jobs/review";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Job" };
@@ -28,7 +31,12 @@ export default async function JobPage({ params }: { params: { id: string } }) {
   const name = async (id: string | null) => (id ? (await db.query.users.findFirst({ where: eq(users.id, id) }))?.name ?? "" : "");
   const [preparedBy, confirmedBy] = await Promise.all([name(job.createdById), name(job.confirmedById)]);
   const preview = job.preview as { lines?: PreviewLine[]; warnings?: string[]; notes?: string[]; total?: number; txnDate?: string; docNumber?: string };
-  const result = job.result as { journalEntryId?: string };
+  const result = job.result as { journalEntryId?: string; undoJobId?: string };
+  const undoOf = (job.params as { undoOf?: string }).undoOf;
+  const undoJob = result.undoJobId ? await getJob(result.undoJobId) : undefined;
+  const canUndo = job.status === "DONE" && (UNDOABLE_KINDS as readonly string[]).includes(job.kind) && !undoOf
+    && (!undoJob || undoJob.status === "CANCELLED") ? await undoableCount(job.id) : 0;
+  const canReprepare = (job.kind === "transfer" || job.kind === "move") && Array.isArray((job.params as { pairs?: unknown }).pairs);
   const lines = preview.lines ?? [];
   const debit = lines.filter((l) => l.posting === "Debit").reduce((s, l) => s + l.amount, 0);
   const credit = lines.filter((l) => l.posting === "Credit").reduce((s, l) => s + l.amount, 0);
@@ -52,6 +60,18 @@ export default async function JobPage({ params }: { params: { id: string } }) {
           </div>
         ))}
       </div>
+
+      {undoOf && <div className="banner-info mb-4"><span>This undoes <Link className="link" href={`/jobs/${undoOf}`}>an earlier job</Link>. Review the items, then confirm to put things back.</span></div>}
+      {undoJob && undoJob.status !== "CANCELLED" && (
+        <div className="banner-info mb-4"><span>An undo for this job was prepared: <Link className="link" href={`/jobs/${undoJob.id}`}>{undoJob.status === "DONE" ? "view the undo" : "review and confirm it"}</Link>.</span></div>
+      )}
+      {job.status === "PREVIEW" && canReprepare && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 text-sm">
+          <span className="text-ink-muted">Want different accounts, dates or amounts?</span>
+          <Link className="btn-secondary btn-sm" href={`/c/${company?.alias}/${job.kind}?from=${job.id}`}>Change and prepare again</Link>
+        </div>
+      )}
+      {canUndo > 0 && <UndoButton jobId={job.id} count={canUndo} />}
 
       {company?.environment === "production" && job.status === "PREVIEW" && <div className="banner-warn mb-4"><span><b>Production company.</b> Confirming will change your real books.</span></div>}
 
@@ -101,23 +121,15 @@ export default async function JobPage({ params }: { params: { id: string } }) {
         </section>
       )}
 
-      <section className="card overflow-x-auto">
-        <div className="border-b border-line px-5 py-3"><h2 className="section-title">{lines.length ? "Steps" : "Items"} ({items.length})</h2></div>
-        <table className="tbl">
-          <thead><tr><th>#</th><th>Action</th><th>Item</th><th>Status</th><th>Details</th></tr></thead>
-          <tbody>
-            {items.map((i) => (
-              <tr key={i.id}>
-                <td className="text-ink-muted">{i.seq}</td>
-                <td className="whitespace-nowrap capitalize">{i.action}</td>
-                <td className="min-w-[14rem]">{i.label}{i.detail && <div className="text-xs text-ink-muted">{i.detail}</div>}</td>
-                <td><StatusPill status={i.status} /></td>
-                <td className={`text-xs ${i.status === "ERROR" || i.status === "FAILED" ? "text-bad" : "text-ink-muted"}`}>{i.message}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      <ItemsTable
+        jobId={job.id}
+        title={lines.length ? "Steps" : "Items"}
+        editable={job.status === "PREVIEW" && items.length > 1 && (job.createdById === user.id || canConfirm(user.role))}
+        items={items.map((i) => ({
+          id: i.id, seq: i.seq, action: i.action, label: i.label, detail: i.detail, status: i.status, message: i.message,
+          excluded: (i.payload as { excluded?: boolean }).excluded === true && i.status === "SKIPPED",
+        }))}
+      />
     </>
   );
 }

@@ -248,7 +248,7 @@ export async function prepareMove(qbo: Qbo, input: MoveInput, today: string): Pr
     kind: "move",
     title: `Move ${input.selected ? `${candidates.length} chosen transaction(s)` : "transactions"} into ${destinations.length === 1 ? destinations[0] : `${destinations.length} accounts`}`,
     params: {
-      start, end, includeReconciled: !!input.includeReconciled, mode: input.selected ? "pick" : "all",
+      pairs: input.pairs, start, end, includeReconciled: !!input.includeReconciled, mode: input.selected ? "pick" : "all",
       mapping: pairs.map((p) => ({ from: p.from.FullyQualifiedName, to: p.to.FullyQualifiedName })),
     },
     preview: { found: candidates.length },

@@ -7,7 +7,8 @@ import { hasCompanyAccess } from "@/lib/session";
 import { QboClient, QboError } from "@/lib/qbo/client";
 import { csvRecords } from "@/lib/logic/csv";
 import { PrepareError, prepareAccounts, prepareMove, prepareReverse, prepareTransfer } from "@/lib/jobs/prepare";
-import { saveJob } from "@/lib/jobs/store";
+import { getJob, saveJob } from "@/lib/jobs/store";
+import { cancelJob } from "@/lib/jobs/run";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -38,7 +39,8 @@ export async function POST(req: Request, { params }: { params: { alias: string }
   const company = await db.query.companies.findFirst({ where: eq(companies.alias, params.alias) });
   if (!company || !(await hasCompanyAccess(user, company.id))) return fail("Company not found.", 404);
 
-  const parsed = Body.safeParse(await req.json().catch(() => null));
+  const raw = await req.json().catch(() => null);
+  const parsed = Body.safeParse(raw);
   if (!parsed.success) return fail(parsed.error.issues.map((i) => i.message).join(" "));
   const b = parsed.data;
   const qbo = new QboClient(company.id);
@@ -58,6 +60,11 @@ export async function POST(req: Request, { params }: { params: { alias: string }
       prepared = await prepareMove(qbo, { ...b, start: b.start || undefined, end: b.end || undefined }, today());
     }
     const id = await saveJob(company, user, prepared);
+    // "Change and prepare again": the preview this one replaces is cancelled so only one stays open.
+    const replaces = typeof raw?.replaces === "string" ? await getJob(raw.replaces) : undefined;
+    if (replaces && replaces.companyId === company.id && replaces.status === "PREVIEW" && (replaces.createdById === user.id || user.role === "ADMIN")) {
+      await cancelJob(replaces, user).catch(() => {});
+    }
     return json({ id });
   } catch (e) {
     if (e instanceof PrepareError) return fail(e.message);

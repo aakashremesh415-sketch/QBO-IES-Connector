@@ -8,7 +8,7 @@ export default function Privacy() {
   return (
     <PublicPage title="Privacy policy" updated="October 1, 2026">
       <p>
-        IES Connector is a private tool run by {name} for its own staff and clients. It connects to QuickBooks Online and
+        Entity Connector is a private tool run by {name} for its own staff and clients. It connects to QuickBooks Online and
         Intuit Enterprise Suite companies to make chart of accounts changes, post journal entries and reclassify transactions.
         This policy explains what information it handles and how.
       </p>

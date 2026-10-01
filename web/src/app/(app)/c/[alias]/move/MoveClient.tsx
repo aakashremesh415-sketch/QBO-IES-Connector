@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import MappingEditor, { completeRows, type MappingRow } from "@/components/MappingEditor";
 import { ErrorBanner, usePrepare, type AccountOption } from "@/components/tools";
+import type { Prefill } from "@/lib/jobs/prefill";
 
 type Txn = {
   key: string;
@@ -18,19 +19,19 @@ type Txn = {
   defaultToId: string;
 };
 
-export default function MoveClient({ alias, accounts }: { alias: string; accounts: AccountOption[] }) {
-  const [rows, setRows] = useState<MappingRow[]>([{ fromId: "", toId: "" }]);
-  const [mode, setMode] = useState<"all" | "pick">("all");
-  const [start, setStart] = useState("");
-  const [end, setEnd] = useState("");
-  const [includeReconciled, setIncludeReconciled] = useState(false);
+export default function MoveClient({ alias, accounts, prefill }: { alias: string; accounts: AccountOption[]; prefill: Prefill | null }) {
+  const [rows, setRows] = useState<MappingRow[]>(prefill?.pairs.length ? prefill.pairs : [{ fromId: "", toId: "" }]);
+  const [mode, setMode] = useState<"all" | "pick">(prefill?.mode ?? "all");
+  const [start, setStart] = useState(prefill?.start ?? "");
+  const [end, setEnd] = useState(prefill?.end ?? "");
+  const [includeReconciled, setIncludeReconciled] = useState(prefill?.includeReconciled ?? false);
   const [txns, setTxns] = useState<Txn[] | null>(null);
   const [chosen, setChosen] = useState<Record<string, boolean>>({});
   const [targets, setTargets] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState("");
   const [finding, setFinding] = useState(false);
   const [findError, setFindError] = useState("");
-  const { prepare, busy, error } = usePrepare(alias);
+  const { prepare, busy, error } = usePrepare(alias, prefill?.replaces);
   const pairs = completeRows(rows);
   const oldIds = new Set(pairs.map((p) => p.fromId));
   const destinations = accounts.filter((a) => a.active && !oldIds.has(a.id));
@@ -66,8 +67,13 @@ export default function MoveClient({ alias, accounts }: { alias: string; account
 
   return (
     <div className="grid gap-5">
+      {prefill && (
+        <div className="banner-info">
+          <span>Filled in from your earlier preview. Change anything, then find and preview again{prefill.replaces ? "; the earlier preview will be cancelled" : ""}.{prefill.mode === "pick" && " Click Find transactions and tick the ones you want again."}</span>
+        </div>
+      )}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <section className="card card-pad grid min-w-0 gap-3">
+        <section className="card card-pad grid h-fit min-w-0 content-start gap-3">
           <div>
             <h2 className="section-title">1. Old account → new account</h2>
             <p className="mt-1 text-sm text-ink-muted">Each transaction&apos;s lines on an old account are switched to that row&apos;s new account. Class, location, name, amount, date and memo stay the same.</p>

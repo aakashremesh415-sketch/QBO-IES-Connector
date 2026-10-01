@@ -8,7 +8,7 @@ export default function Terms() {
   return (
     <PublicPage title="End-user license agreement" updated="October 1, 2026">
       <p>
-        These terms cover your use of IES Connector, a private tool run by {name}. By signing in or connecting a QuickBooks
+        These terms cover your use of Entity Connector, a private tool run by {name}. By signing in or connecting a QuickBooks
         company, you agree to them.
       </p>
 
